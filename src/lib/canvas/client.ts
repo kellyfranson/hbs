@@ -13,6 +13,8 @@ import type {
   AssignmentsResult,
   CanvasAssignment,
   CanvasCourse,
+  CanvasFile,
+  CanvasFolder,
   CanvasModule,
   CanvasModuleItem,
   CanvasPage,
@@ -395,6 +397,61 @@ async function getPages(
   );
 }
 
+async function getFiles(
+  base: string,
+  token: string,
+  courseId: number,
+  revalidate: number,
+): Promise<CanvasFile[]> {
+  return paginate<CanvasFile>(
+    `${base}/api/v1/courses/${courseId}/files?per_page=100`,
+    token,
+    revalidate,
+  );
+}
+
+async function getFolders(
+  base: string,
+  token: string,
+  courseId: number,
+  revalidate: number,
+): Promise<CanvasFolder[]> {
+  return paginate<CanvasFolder>(
+    `${base}/api/v1/courses/${courseId}/folders?per_page=100`,
+    token,
+    revalidate,
+  );
+}
+
+/**
+ * Run a fetch for a course feature that may simply be switched off.
+ *
+ * A course with the Pages or Files tab disabled answers 404 (sometimes 403) on
+ * that endpoint. That is absence, not failure, and it must not cost the course
+ * its other material — which is exactly what happened when these ran under a
+ * plain `Promise.all`. Real faults still propagate and mark the course
+ * skipped.
+ */
+async function optional<T>(work: Promise<T[]>): Promise<T[]> {
+  try {
+    return await work;
+  } catch (error) {
+    if (
+      error instanceof CanvasError &&
+      (error.status === 403 || error.status === 404)
+    ) {
+      return [];
+    }
+    throw error;
+  }
+}
+
+/** "course files/Course Resources/02. Case Materials" -> the readable tail. */
+function folderLabel(fullName: string | undefined): string {
+  if (!fullName) return "";
+  return fullName.replace(/^course files\/?/, "");
+}
+
 /**
  * Ids already covered by the assignment table.
  *
@@ -436,18 +493,21 @@ async function getCourseMaterial(
   course: CanvasCourse,
   revalidate: number,
 ): Promise<MaterialRow[]> {
-  const [modules, pages, assignments] = await Promise.all([
-    getModules(base, token, course.id, revalidate),
-    getPages(base, token, course.id, revalidate),
+  const [modules, pages, files, folders, assignments] = await Promise.all([
+    optional(getModules(base, token, course.id, revalidate)),
+    optional(getPages(base, token, course.id, revalidate)),
+    optional(getFiles(base, token, course.id, revalidate)),
+    optional(getFolders(base, token, course.id, revalidate)),
     // Needed only to recognise items the assignment table already shows. No
     // bucket filter here: a bucket would narrow this and let duplicates slip
     // through.
-    getAssignments(base, token, course.id, undefined, revalidate),
+    optional(getAssignments(base, token, course.id, undefined, revalidate)),
   ]);
 
   const known = knownIds(assignments);
   const rows: MaterialRow[] = [];
   const pagesInModules = new Set<string>();
+  const filesInModules = new Set<number>();
 
   const courseFields = {
     courseId: course.id,
@@ -458,6 +518,9 @@ async function getCourseMaterial(
   for (const mod of modules) {
     for (const item of mod.items ?? []) {
       if (item.page_url) pagesInModules.add(item.page_url);
+      if (item.type === "File" && item.content_id) {
+        filesInModules.add(item.content_id);
+      }
 
       if (!item.type || SKIPPED_ITEM_TYPES.has(item.type)) continue;
       if (item.published === false) continue;
@@ -490,6 +553,28 @@ async function getCourseMaterial(
       dueAt: page.todo_date ?? null,
       url:
         page.html_url ?? `${base}/courses/${course.id}/pages/${page.url ?? ""}`,
+    });
+  }
+
+  // Files are where case PDFs, technical notes and readings actually live in
+  // courses that do not use Modules. Folders give them their structure, so the
+  // folder path stands in for a module name.
+  const folderById = new Map(folders.map((f) => [f.id, folderLabel(f.full_name)]));
+
+  for (const file of files) {
+    if (file.hidden || file.locked_for_user) continue;
+    // Already listed above as a module item.
+    if (filesInModules.has(file.id)) continue;
+
+    rows.push({
+      ...courseFields,
+      module: (file.folder_id && folderById.get(file.folder_id)) || "",
+      title: file.display_name ?? file.filename ?? "(untitled)",
+      kind: "file",
+      dueAt: null,
+      // The `url` on a file is a short-lived signed download link, so link to
+      // the Canvas page for the file instead.
+      url: `${base}/courses/${course.id}/files/${file.id}`,
     });
   }
 

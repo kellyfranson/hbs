@@ -70,6 +70,27 @@ export interface CanvasModule {
   published?: boolean;
 }
 
+export interface CanvasFile {
+  id: number;
+  display_name?: string;
+  filename?: string;
+  folder_id?: number;
+  size?: number;
+  updated_at?: string;
+  /** Canvas spells this with a hyphen, so it is not a valid identifier. */
+  "content-type"?: string;
+  hidden?: boolean;
+  /** Set when the file is locked to this user; such files are unreadable. */
+  locked_for_user?: boolean;
+}
+
+export interface CanvasFolder {
+  id: number;
+  /** e.g. "course files/Course Resources/02. Case Materials" */
+  full_name?: string;
+  name?: string;
+}
+
 export interface CanvasPage {
   page_id: number;
   url?: string;
@@ -104,7 +125,10 @@ export interface MaterialRow {
   courseId: number;
   course: string;
   courseCode: string;
-  /** The module this sits in, or "" for a page that belongs to no module. */
+  /**
+   * Where the item sits: a module name, a Files folder path, or "" for a page
+   * that belongs to neither.
+   */
   module: string;
   title: string;
   /** Lowercased Canvas item type: page, file, external_url, quiz, ... */
