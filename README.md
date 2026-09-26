@@ -109,6 +109,38 @@ A disabled course feature answers 404 or 403 on its endpoint. That's treated as
 *absence*, not failure, so a course with Pages switched off still contributes
 its files. Genuine faults still mark the course skipped.
 
+## Downloading the files
+
+`scripts/download-material.mjs` mirrors each course's Files area to disk as
+`<out>/<COURSE_CODE>/<folder path>/<file>`, preserving Canvas' own folder
+structure.
+
+```bash
+node scripts/download-material.mjs --ext pdf --dry-run
+node scripts/download-material.mjs --ext pdf
+```
+
+Always dry-run first — it prints the file count and total size per course
+without fetching anything. Course video can be enormous (3.7 GB of the 3.9 GB
+in one RC section), which is what `--ext` is for.
+
+| Flag | Default | Notes |
+| --- | --- | --- |
+| `--out` | `~/Downloads/HBS Course Material` | Destination root |
+| `--ext` | all | Comma-separated, e.g. `--ext pdf,pptx`. Matches by extension *or* by the MIME type Canvas reports, so extension-less files are still caught |
+| `--course` | all | Repeatable, by course code |
+| `--term` | `current` | `all` includes past terms |
+| `--max-mb` | none | Skip files larger than this |
+| `--dry-run` | off | Report only |
+
+Downloads run five at a time, write to a `.part` file and rename on completion,
+and skip anything already on disk at the right size — so an interrupted run
+resumes rather than restarting.
+
+> **Keep the downloads out of this repo.** Course cases are copyrighted, and
+> this repository is public. The default destination is deliberately outside
+> the project; `/downloads/` is gitignored as a backstop.
+
 ## Caveats
 
 Anything that exists only in a PDF syllabus — a common home for case dates — is

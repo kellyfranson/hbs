@@ -42,3 +42,7 @@ next-env.d.ts
 
 # allow the template, keep real secrets out
 !.env.example
+
+# downloaded course material must never reach a public repo
+/downloads/
+"HBS Course Material"/
