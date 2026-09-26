@@ -233,18 +233,71 @@ async function main() {
 
   const planned = [];
   const skippedLarge = [];
+  const hbspByCourse = {};
 
   for (const course of courses) {
     const code = safeSegment(course.course_code || String(course.id));
-    const [files, folders] = await Promise.all([
+    const [files, folders, assignments] = await Promise.all([
       paginate(`${base}/api/v1/courses/${course.id}/files?per_page=100`, token),
       paginate(`${base}/api/v1/courses/${course.id}/folders?per_page=100`, token),
+      paginate(`${base}/api/v1/courses/${course.id}/assignments?per_page=100`, token),
     ]);
 
     const folderById = new Map(folders.map((f) => [f.id, f.full_name || ""]));
+    const inFilesArea = new Set(files.map((f) => f.id));
 
-    for (const file of files) {
-      if (file.hidden || file.locked_for_user) continue;
+    // Some files are linked from an assignment description but never appear in
+    // the course Files listing, so walking Files alone quietly misses them.
+    const extra = [];
+    const anchor = /<a\b[^>]*\bhref="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+
+    for (const a of assignments) {
+      for (const m of (a.description || "").matchAll(anchor)) {
+        const href = m[1].replace(/&amp;/g, "&");
+        const label = m[2].replace(/<[^>]*>/g, "").replace(/&nbsp;/g, " ").trim();
+
+        if (/hbsp\.harvard\.edu/.test(href)) {
+          (hbspByCourse[code] ??= []).push({
+            assignment: a.name || "",
+            due: a.due_at || "",
+            label: label || href,
+            url: href,
+          });
+          continue;
+        }
+        const fm = href.match(/\/courses\/\d+\/files\/(\d+)/);
+        if (!fm) continue;
+        const id = Number(fm[1]);
+        if (inFilesArea.has(id) || extra.some((e) => e.id === id)) continue;
+        extra.push({ id, assignment: a.name || "" });
+      }
+    }
+
+    const linked = await Promise.all(
+      extra.map(async (e) => {
+        const res = await fetch(`${base}/api/v1/files/${e.id}`, {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: AbortSignal.timeout(TIMEOUT_MS),
+        });
+        // A file can be linked from a description and still be restricted.
+        if (!res.ok) return null;
+        const file = await res.json();
+        // No folder of its own: file it under the assignment that links it.
+        return {
+          ...file,
+          folder_id: undefined,
+          __folder: "Linked from assignments",
+          __linked: true,
+        };
+      }),
+    );
+
+    for (const file of [...files, ...linked.filter(Boolean)]) {
+      // `hidden` means "not listed in the Files tab", which is exactly why a
+      // linked file was missing from it — so for those it is expected, not a
+      // reason to skip. `locked_for_user` is a real access restriction.
+      if (file.locked_for_user) continue;
+      if (file.hidden && !file.__linked) continue;
 
       const raw = file.display_name || file.filename || `file-${file.id}`;
       if (args.exts.length && !matchesExt(raw, file, args.exts)) continue;
@@ -253,7 +306,7 @@ async function main() {
       const dest = path.join(
         args.out,
         code,
-        ...safePath(folderById.get(file.folder_id) || ""),
+        ...safePath(file.__folder || folderById.get(file.folder_id) || ""),
         name,
       );
 
@@ -304,7 +357,8 @@ async function main() {
   }
 
   if (!todo.length) {
-    console.log("\nNothing to do.");
+    console.log("\nNo files to fetch.");
+    writeCaseIndex(hbspByCourse, args.out);
     return;
   }
 
@@ -324,7 +378,54 @@ async function main() {
 
   console.log(`\n\nDownloaded ${done} of ${todo.length} files into ${args.out}`);
   for (const f of failures) console.error(`  failed: ${f.file} — ${f.reason}`);
+
+  writeCaseIndex(hbspByCourse, args.out);
+
   if (failures.length) process.exitCode = 1;
+}
+
+/**
+ * Write an index of the Harvard Business Publishing links.
+ *
+ * The cases themselves are not in Canvas and cannot be downloaded: they sit in
+ * an HBP coursepack behind your own login. The next best thing is a per-class
+ * index sitting next to the files that could be fetched.
+ */
+function writeCaseIndex(hbspByCourse, out) {
+  const courses = Object.entries(hbspByCourse).filter(([, v]) => v.length);
+  if (!courses.length) return;
+
+  const lines = [
+    "# Cases and readings on Harvard Business Publishing",
+    "",
+    "These are not stored in Canvas, so they cannot be downloaded here.",
+    "Each link opens in HBP against your own login.",
+    "",
+  ];
+
+  let count = 0;
+  for (const [code, links] of courses.sort()) {
+    lines.push(`## ${code}`, "");
+    const byAssignment = new Map();
+    for (const l of links) {
+      if (!byAssignment.has(l.assignment)) byAssignment.set(l.assignment, { due: l.due, items: new Map() });
+      byAssignment.get(l.assignment).items.set(l.url, l.label);
+    }
+    const sorted = [...byAssignment].sort((a, b) => (a[1].due || "9999").localeCompare(b[1].due || "9999"));
+    for (const [assignment, { due, items }] of sorted) {
+      lines.push(`### ${assignment}${due ? `  _(due ${due.slice(0, 10)})_` : ""}`);
+      for (const [url, label] of items) {
+        lines.push(`- [${label}](${url})`);
+        count++;
+      }
+      lines.push("");
+    }
+  }
+
+  const dest = path.join(out, "CASES-on-HBP.md");
+  fs.mkdirSync(out, { recursive: true });
+  fs.writeFileSync(dest, lines.join("\n"), "utf8");
+  console.log(`\nWrote ${count} HBP case/reading links to ${dest}`);
 }
 
 main().catch((error) => {

@@ -141,15 +141,48 @@ resumes rather than restarting.
 > this repository is public. The default destination is deliberately outside
 > the project; `/downloads/` is gitignored as a backstop.
 
+## Where the cases actually are
+
+**The cases are not in Canvas.** At HBS an assignment description reads:
+
+> Case: [Stock-Based Compensation at Twitter (119-032)](https://hbsp.harvard.edu/tu/07562cf2)
+
+That link goes to Harvard Business Publishing, not to a Canvas file. Of 241
+assignments, 156 carry a description, and those descriptions hold **113 HBP
+links** against 106 Canvas file links. No API token can fetch the HBP items —
+they sit in a coursepack behind your own HBP login, and this tool does not try
+to work around that.
+
+What it does instead:
+
+- Every material link in an assignment description is extracted and shown
+  under that assignment, badged `HBP`, `FILE` or `LINK`. Descriptions come back
+  with the assignments call, so this costs no extra requests.
+- The CSV gets one row per link, carrying the parent assignment's due date, so
+  sorting by date gives you a reading schedule.
+- The downloader writes `CASES-on-HBP.md` into the output folder: a per-class
+  index of every HBP case and reading, ordered by due date, sitting next to the
+  files it *could* fetch.
+
+### Hidden files
+
+A file linked from a description often does not appear in the course Files
+listing at all, because Canvas marks it `hidden` — meaning "not shown in the
+Files tab", not "inaccessible". Walking Files alone silently misses these (19
+of them in one RC section). The downloader follows description links too and
+ignores `hidden` for those, while still respecting `locked_for_user`, which is
+a real restriction.
+
 ## Caveats
 
 Anything that exists only in a PDF syllabus — a common home for case dates — is
 not in Canvas at all and cannot be pulled. The material pass gets you the case
 *files*; some dates may still be manual.
 
-At HBS the cases themselves *are* assignments (`FIN1 | Class 3 | Mighty
-Squirrel Brewery and Taproom`), so the main table already covers the schedule.
-The material pass is what pairs each case with its exhibits and templates.
+At HBS the case *assignments* are Canvas assignments (`FIN1 | Class 3 | Mighty
+Squirrel Brewery and Taproom`), so the main table covers the schedule — but the
+case documents themselves are on HBP and cannot be downloaded. See
+[Where the cases actually are](#where-the-cases-actually-are).
 
 If assignment counts look off, check the `term` column via **All terms**: the
 filter relies on Canvas term start/end dates being set sensibly.

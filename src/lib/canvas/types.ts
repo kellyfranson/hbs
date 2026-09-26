@@ -25,6 +25,11 @@ export interface CanvasSubmission {
 export interface CanvasAssignment {
   id: number;
   name?: string;
+  /**
+   * HTML. At HBS this is where the actual materials are listed — the case, the
+   * readings, the supplements — as links rather than attachments.
+   */
+  description?: string | null;
   due_at?: string | null;
   points_possible?: number | null;
   submission_types?: string[];
@@ -102,6 +107,21 @@ export interface CanvasPage {
   todo_date?: string | null;
 }
 
+/**
+ * A material linked from an assignment description.
+ *
+ * `hbsp` is a Harvard Business Publishing coursepack link — the cases
+ * themselves. Those are not in Canvas and cannot be fetched through this API;
+ * they open in HBP against your own login.
+ */
+export interface AssignmentLink {
+  label: string;
+  url: string;
+  kind: "hbsp" | "file" | "link";
+  /** Canvas file id, when the link points at one. */
+  fileId?: number;
+}
+
 /** One flattened row: an assignment plus the course it belongs to. */
 export interface AssignmentRow {
   courseId: number;
@@ -115,6 +135,8 @@ export interface AssignmentRow {
   submitted: boolean;
   submissionTypes: string[];
   url: string;
+  /** Cases, readings and supplements linked from the description. */
+  links: AssignmentLink[];
 }
 
 /**

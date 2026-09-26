@@ -4,6 +4,7 @@ import { getAssignmentRows, getMaterialRows } from "@/lib/canvas/client";
 import { daysUntil, formatLocal } from "@/lib/canvas/csv";
 import {
   isBucket,
+  type AssignmentLink,
   type AssignmentRow,
   type AssignmentsQuery,
   type MaterialRow,
@@ -154,6 +155,7 @@ function AssignmentRowView({ row, now }: { row: AssignmentRow; now: Date }) {
       </td>
       <td className="py-2 pr-3">
         <ExternalLink href={row.url}>{row.assignment}</ExternalLink>
+        <MaterialLinks links={row.links} />
       </td>
       <td className="py-2 pr-3 text-right font-mono text-xs text-stone-500">
         {row.points ?? "—"}
@@ -266,6 +268,38 @@ function SkippedNotice({
         ))}
       </ul>
     </div>
+  );
+}
+
+/**
+ * The cases and readings linked from an assignment's description.
+ *
+ * `hbsp` links are Harvard Business Publishing coursepack items — the cases
+ * themselves. They are not in Canvas and open against your HBP login, so they
+ * are badged to set that expectation.
+ */
+function MaterialLinks({ links }: { links: AssignmentLink[] }) {
+  if (links.length === 0) return null;
+
+  return (
+    <ul className="mt-1 space-y-0.5">
+      {links.map((link) => (
+        <li key={link.url} className="flex items-baseline gap-1.5 text-xs">
+          <span
+            className={`shrink-0 rounded px-1 font-mono text-[9px] uppercase ${
+              link.kind === "hbsp"
+                ? "bg-[#A51C30]/10 text-[#A51C30]"
+                : "bg-stone-200 text-stone-500 dark:bg-stone-800"
+            }`}
+          >
+            {link.kind === "hbsp" ? "HBP" : link.kind === "file" ? "file" : "link"}
+          </span>
+          <ExternalLink href={link.url}>
+            <span className="text-stone-600 dark:text-stone-400">{link.label}</span>
+          </ExternalLink>
+        </li>
+      ))}
+    </ul>
   );
 }
 

@@ -8,6 +8,7 @@
  */
 
 import type {
+  AssignmentLink,
   AssignmentRow,
   AssignmentsQuery,
   AssignmentsResult,
@@ -241,6 +242,81 @@ async function getAssignments(
   );
 }
 
+/**
+ * Hosts that are navigation or admin rather than course material.
+ *
+ * Assignment descriptions also link to app stores, survey forms and Outlook
+ * safelinks. None of that is a reading, and listing it buries what is.
+ */
+const NON_MATERIAL_HOSTS = [
+  "apps.apple.com",
+  "play.google.com",
+  "forms.gle",
+  "forms.cloud.microsoft",
+  "safelinks.protection.outlook.com",
+  "qualtrics.com",
+];
+
+/** Turn `&amp;` and friends back into text; descriptions are HTML-escaped. */
+function unescapeHtml(text: string): string {
+  return text
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, " ");
+}
+
+/**
+ * Pull the material links out of an assignment description.
+ *
+ * At HBS the case is not an attachment: the description says
+ * `Case: <a href="https://hbsp.harvard.edu/tu/...">Stock-Based Compensation at
+ * Twitter (119-032)</a>`. Those links are the assignment, so they are worth
+ * surfacing even though the case PDF itself lives outside Canvas.
+ *
+ * Descriptions arrive with the assignments call, so this costs no extra
+ * requests.
+ */
+export function extractLinks(description: string | null | undefined): AssignmentLink[] {
+  if (!description) return [];
+
+  const links: AssignmentLink[] = [];
+  const seen = new Set<string>();
+  const anchor = /<a\b[^>]*\bhref="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+
+  for (const match of description.matchAll(anchor)) {
+    const url = unescapeHtml(match[1]).trim();
+    const label = unescapeHtml(match[2].replace(/<[^>]*>/g, "")).trim();
+
+    let host: string;
+    try {
+      host = new URL(url).hostname;
+    } catch {
+      continue; // relative or malformed href
+    }
+    if (NON_MATERIAL_HOSTS.some((h) => host === h || host.endsWith(`.${h}`))) continue;
+    if (seen.has(url)) continue;
+    seen.add(url);
+
+    const fileMatch = url.match(/\/courses\/\d+\/files\/(\d+)/);
+
+    links.push({
+      label: label || url,
+      url,
+      kind: host.endsWith("hbsp.harvard.edu")
+        ? "hbsp"
+        : fileMatch
+          ? "file"
+          : "link",
+      ...(fileMatch ? { fileId: Number(fileMatch[1]) } : {}),
+    });
+  }
+
+  return links;
+}
+
 function toRow(
   course: CanvasCourse,
   assignment: CanvasAssignment,
@@ -259,6 +335,7 @@ function toRow(
     url:
       assignment.html_url ??
       `${base}/courses/${course.id}/assignments/${assignment.id}`,
+    links: extractLinks(assignment.description),
   };
 }
 

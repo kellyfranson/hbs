@@ -64,7 +64,9 @@ export function toCsv(
 ): string {
   const now = new Date();
 
-  const assignmentLines = rows.map((row) =>
+  // Each assignment is followed by its cases and readings, which carry the
+  // parent's due date so the sheet still sorts into a usable reading schedule.
+  const assignmentLines = rows.flatMap((row) => [
     [
       "assignment",
       row.course,
@@ -82,7 +84,26 @@ export function toCsv(
     ]
       .map(escape)
       .join(","),
-  );
+    ...row.links.map((link) =>
+      [
+        link.kind === "hbsp" ? "case-or-reading" : `linked-${link.kind}`,
+        row.course,
+        row.courseCode,
+        row.term,
+        row.assignment,
+        link.label,
+        formatLocal(row.dueAt, timeZone),
+        row.dueAt ?? "",
+        daysUntil(row.dueAt, now),
+        "",
+        "",
+        "",
+        link.url,
+      ]
+        .map(escape)
+        .join(","),
+    ),
+  ]);
 
   const materialLines = material.map((row) =>
     [
