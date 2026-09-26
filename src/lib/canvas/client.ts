@@ -13,6 +13,12 @@ import type {
   AssignmentsResult,
   CanvasAssignment,
   CanvasCourse,
+  CanvasModule,
+  CanvasModuleItem,
+  CanvasPage,
+  KnownIds,
+  MaterialResult,
+  MaterialRow,
   SkippedCourse,
 } from "./types";
 
@@ -255,6 +261,26 @@ function toRow(
 }
 
 /**
+ * The courses a pull should cover, plus the connection details to read them.
+ *
+ * Shared by the assignment and material passes so they agree on the course
+ * list. The underlying request is identical in both, so React's fetch
+ * memoization collapses it to one call per render.
+ */
+async function resolveCourses(query: AssignmentsQuery) {
+  const { token, base } = config();
+  const revalidate = query.revalidate ?? DEFAULT_REVALIDATE;
+  const now = new Date();
+
+  let courses = await getCourses(base, token, revalidate);
+  if (query.term !== "all") {
+    courses = courses.filter((course) => isCurrent(course, now));
+  }
+
+  return { token, base, revalidate, now, courses };
+}
+
+/**
  * Every assignment across the caller's active courses, sorted by due date.
  *
  * Courses are fetched concurrently and failures are isolated: a concluded or
@@ -264,14 +290,7 @@ function toRow(
 export async function getAssignmentRows(
   query: AssignmentsQuery = {},
 ): Promise<AssignmentsResult> {
-  const { token, base } = config();
-  const revalidate = query.revalidate ?? DEFAULT_REVALIDATE;
-  const now = new Date();
-
-  let courses = await getCourses(base, token, revalidate);
-  if (query.term !== "all") {
-    courses = courses.filter((course) => isCurrent(course, now));
-  }
+  const { token, base, revalidate, now, courses } = await resolveCourses(query);
 
   const settled = await Promise.allSettled(
     courses.map((course) =>
@@ -311,4 +330,203 @@ export async function getAssignmentRows(
     skipped,
     fetchedAt: now.toISOString(),
   };
+}
+
+/* ------------------------------------------------------------------ *
+ * Second pass: Modules and Pages
+ *
+ * Plenty of course material — cases, technical notes, readings — is never
+ * modelled as an assignment. It hangs off a module or sits on a page, with
+ * the date living in the syllabus rather than in Canvas. The assignments
+ * endpoint cannot see any of it, so it takes its own pass.
+ * ------------------------------------------------------------------ */
+
+/** Headings carry no content, so they are noise in a material list. */
+const SKIPPED_ITEM_TYPES = new Set(["SubHeader"]);
+
+const KIND_BY_TYPE: Record<string, string> = {
+  Assignment: "assignment",
+  Discussion: "discussion",
+  ExternalTool: "tool",
+  ExternalUrl: "link",
+  File: "file",
+  Page: "page",
+  Quiz: "quiz",
+};
+
+async function getModules(
+  base: string,
+  token: string,
+  courseId: number,
+  revalidate: number,
+): Promise<CanvasModule[]> {
+  const modules = await paginate<CanvasModule>(
+    `${base}/api/v1/courses/${courseId}/modules?include[]=items&per_page=100`,
+    token,
+    revalidate,
+  );
+
+  // Canvas inlines `items` only for small modules. A big one comes back with
+  // an items_count and no items, and has to be fetched on its own.
+  return Promise.all(
+    modules.map(async (mod) => {
+      if (mod.items || !mod.items_count) return mod;
+
+      const items = await paginate<CanvasModuleItem>(
+        `${base}/api/v1/courses/${courseId}/modules/${mod.id}/items?per_page=100`,
+        token,
+        revalidate,
+      );
+      return { ...mod, items };
+    }),
+  );
+}
+
+async function getPages(
+  base: string,
+  token: string,
+  courseId: number,
+  revalidate: number,
+): Promise<CanvasPage[]> {
+  return paginate<CanvasPage>(
+    `${base}/api/v1/courses/${courseId}/pages?per_page=100&sort=title`,
+    token,
+    revalidate,
+  );
+}
+
+/**
+ * Ids already covered by the assignment table.
+ *
+ * A graded quiz or discussion exists twice in Canvas, under two different
+ * ids, and a module item points at the quiz/topic id rather than the
+ * assignment id. Collecting all three keeps those out of the material list.
+ */
+function knownIds(assignments: CanvasAssignment[]): KnownIds {
+  const known: KnownIds = {
+    assignments: new Set(),
+    quizzes: new Set(),
+    discussions: new Set(),
+  };
+
+  for (const assignment of assignments) {
+    known.assignments.add(assignment.id);
+    if (assignment.quiz_id) known.quizzes.add(assignment.quiz_id);
+    if (assignment.discussion_topic?.id) {
+      known.discussions.add(assignment.discussion_topic.id);
+    }
+  }
+
+  return known;
+}
+
+function isAlreadyListed(item: CanvasModuleItem, known: KnownIds): boolean {
+  if (!item.content_id) return false;
+
+  if (item.type === "Assignment") return known.assignments.has(item.content_id);
+  if (item.type === "Quiz") return known.quizzes.has(item.content_id);
+  if (item.type === "Discussion") return known.discussions.has(item.content_id);
+  return false;
+}
+
+/** Everything one course contributes to the material list. */
+async function getCourseMaterial(
+  base: string,
+  token: string,
+  course: CanvasCourse,
+  revalidate: number,
+): Promise<MaterialRow[]> {
+  const [modules, pages, assignments] = await Promise.all([
+    getModules(base, token, course.id, revalidate),
+    getPages(base, token, course.id, revalidate),
+    // Needed only to recognise items the assignment table already shows. No
+    // bucket filter here: a bucket would narrow this and let duplicates slip
+    // through.
+    getAssignments(base, token, course.id, undefined, revalidate),
+  ]);
+
+  const known = knownIds(assignments);
+  const rows: MaterialRow[] = [];
+  const pagesInModules = new Set<string>();
+
+  const courseFields = {
+    courseId: course.id,
+    course: courseLabel(course),
+    courseCode: course.course_code ?? "",
+  };
+
+  for (const mod of modules) {
+    for (const item of mod.items ?? []) {
+      if (item.page_url) pagesInModules.add(item.page_url);
+
+      if (!item.type || SKIPPED_ITEM_TYPES.has(item.type)) continue;
+      if (item.published === false) continue;
+      if (isAlreadyListed(item, known)) continue;
+
+      rows.push({
+        ...courseFields,
+        module: mod.name ?? "",
+        title: item.title ?? "(untitled)",
+        kind: KIND_BY_TYPE[item.type] ?? item.type.toLowerCase(),
+        dueAt: null,
+        url:
+          item.html_url ??
+          item.external_url ??
+          `${base}/courses/${course.id}/modules/items/${item.id}`,
+      });
+    }
+  }
+
+  for (const page of pages) {
+    if (page.published === false) continue;
+    // Already listed above as a module item.
+    if (page.url && pagesInModules.has(page.url)) continue;
+
+    rows.push({
+      ...courseFields,
+      module: "",
+      title: page.title ?? "(untitled)",
+      kind: "page",
+      dueAt: page.todo_date ?? null,
+      url:
+        page.html_url ?? `${base}/courses/${course.id}/pages/${page.url ?? ""}`,
+    });
+  }
+
+  return rows;
+}
+
+/**
+ * Course material that the assignments endpoint cannot see.
+ *
+ * Items already in the assignment table are removed, so this is strictly the
+ * remainder: what you would otherwise have to go hunting through Canvas for.
+ */
+export async function getMaterialRows(
+  query: AssignmentsQuery = {},
+): Promise<MaterialResult> {
+  const { token, base, revalidate, courses } = await resolveCourses(query);
+
+  const settled = await Promise.allSettled(
+    courses.map((course) => getCourseMaterial(base, token, course, revalidate)),
+  );
+
+  const material: MaterialRow[] = [];
+  const skipped: SkippedCourse[] = [];
+
+  settled.forEach((outcome, index) => {
+    if (outcome.status === "rejected") {
+      skipped.push({
+        course: courseLabel(courses[index]),
+        reason:
+          outcome.reason instanceof Error
+            ? outcome.reason.message
+            : String(outcome.reason),
+      });
+      return;
+    }
+    material.push(...outcome.value);
+  });
+
+  return { material, skipped };
 }

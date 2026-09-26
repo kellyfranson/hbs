@@ -31,6 +31,54 @@ export interface CanvasAssignment {
   html_url?: string;
   /** Only present when the request asks for `include[]=submission`. */
   submission?: CanvasSubmission;
+  /**
+   * A graded quiz or discussion is both an assignment and a quiz/topic, with a
+   * different id in each space. Module items point at the quiz/topic id, so
+   * both are needed to recognise a module item we already have.
+   */
+  quiz_id?: number;
+  discussion_topic?: { id: number };
+}
+
+/** A single entry inside a module: a page, file, assignment, link, heading. */
+export interface CanvasModuleItem {
+  id: number;
+  title?: string;
+  position?: number;
+  /** Assignment | Page | File | Discussion | Quiz | SubHeader | ExternalUrl | ExternalTool */
+  type?: string;
+  /** The id of the thing pointed at, in that thing's own id space. */
+  content_id?: number;
+  /** Set for Page items; the slug used by the pages endpoint. */
+  page_url?: string;
+  html_url?: string;
+  external_url?: string;
+  published?: boolean;
+}
+
+export interface CanvasModule {
+  id: number;
+  name?: string;
+  position?: number;
+  unlock_at?: string | null;
+  items_count?: number;
+  /**
+   * Present only when `include[]=items` is requested AND the module is small
+   * enough for Canvas to inline it. Large modules must be fetched separately.
+   */
+  items?: CanvasModuleItem[];
+  published?: boolean;
+}
+
+export interface CanvasPage {
+  page_id: number;
+  url?: string;
+  title?: string;
+  html_url?: string;
+  updated_at?: string;
+  published?: boolean;
+  /** Canvas' "add to student to-do" date. Rarely set, but free when it is. */
+  todo_date?: string | null;
 }
 
 /** One flattened row: an assignment plus the course it belongs to. */
@@ -48,6 +96,29 @@ export interface AssignmentRow {
   url: string;
 }
 
+/**
+ * Course material that is not an assignment: the cases, notes and readings
+ * handed out through Modules and Pages.
+ */
+export interface MaterialRow {
+  courseId: number;
+  course: string;
+  courseCode: string;
+  /** The module this sits in, or "" for a page that belongs to no module. */
+  module: string;
+  title: string;
+  /** Lowercased Canvas item type: page, file, external_url, quiz, ... */
+  kind: string;
+  /** Almost always null; Canvas only carries a date for to-do pages. */
+  dueAt: string | null;
+  url: string;
+}
+
+export interface MaterialResult {
+  material: MaterialRow[];
+  skipped: SkippedCourse[];
+}
+
 /** A course we could list but could not read assignments from. */
 export interface SkippedCourse {
   course: string;
@@ -59,6 +130,16 @@ export interface AssignmentsResult {
   courseCount: number;
   skipped: SkippedCourse[];
   fetchedAt: string;
+}
+
+/**
+ * What the material pass needs to know about the assignment pass, so it can
+ * drop module items that are already in the assignment table.
+ */
+export interface KnownIds {
+  assignments: Set<number>;
+  quizzes: Set<number>;
+  discussions: Set<number>;
 }
 
 /** Canvas' own server-side filters for the assignments endpoint. */

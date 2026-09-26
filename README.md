@@ -1,12 +1,14 @@
 # HBS Assignments
 
 Pulls every assignment across your active Canvas courses into one list, sorted
-by due date. Built with Next.js 16 (App Router). Your Canvas token stays on the
-server and is never sent to the browser.
+by due date, plus a second pass over Modules and Pages to catch the cases and
+readings Canvas doesn't model as assignments. Built with Next.js 16 (App
+Router). Your Canvas token stays on the server and is never sent to the browser.
 
 - `/` — the assignment table, with filters and a CSV download
+- `/?material=1` — also lists course material from Modules and Pages
 - `/api/assignments` — the same data as JSON
-- `/api/assignments?format=csv` — CSV download
+- `/api/assignments?format=csv&material=1` — one CSV covering both passes
 
 ## Setup
 
@@ -43,6 +45,7 @@ Set from the buttons in the UI, or by query string on either the page or the API
 | `term` | `current` (default), `all` | `current` keeps only courses whose term is running today |
 | `bucket` | `upcoming`, `unsubmitted`, `past`, `overdue`, `future` | Canvas-side filter |
 | `undated` | `1` | Include assignments with no due date (excluded by default) |
+| `material` | `1` | Add the Modules/Pages pass |
 | `refresh` | `1` | Bypass the cache and re-pull from Canvas |
 | `format` | `csv` | API route only — download instead of JSON |
 
@@ -67,13 +70,36 @@ reads `CANVAS_TOKEN` and must never be imported from a `"use client"` file.
   is the same user. **If you ever deploy this for more than one person, that
   cache has to become per-user or be turned off.**
 
+## The Modules/Pages pass
+
+Plenty of course material is never an assignment: a case PDF hanging off a
+module, a technical note on a page, with the date living in the syllabus rather
+than in Canvas. `?material=1` walks every course's modules (including each
+module's items) and its pages, and lists what it finds grouped by module.
+
+It costs three extra requests per course, so it's opt-in rather than automatic
+— click **Load course material** or add `?material=1`.
+
+Two things make the output usable rather than a dump of everything:
+
+- **Anything already in the assignment table is removed.** That's harder than
+  matching ids, because a graded quiz or discussion exists twice in Canvas
+  under two different ids, and module items point at the quiz/topic id rather
+  than the assignment id. The dedupe collects all three id spaces.
+- **Pages already reachable through a module aren't listed twice.** Only pages
+  belonging to no module get their own entry.
+
+Sub-headings and unpublished items are dropped. Where Canvas has a `todo_date`
+on a page, it's shown.
+
 ## Caveats
 
-Only covers items Canvas models as **assignments**. Cases distributed through
-Modules, Pages, or Files won't appear — `?undated=1` catches the subset that
-exist as assignments with no due date, but not the rest. If your count looks
-low, the next place to look is `/api/v1/courses/:id/modules?include[]=items` or
-`/api/v1/planner/items`.
+Even with both passes, anything that exists only in a PDF syllabus — the usual
+home for HBS case dates — is not in Canvas at all and cannot be pulled. The
+Modules pass gets you the case *files*; the dates may still be manual.
+
+If assignment counts look off, check the `term` column via **All terms**: the
+filter relies on Canvas term start/end dates being set sensibly.
 
 ## Deploying
 
